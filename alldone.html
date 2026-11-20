@@ -1,0 +1,350 @@
+from flask import Flask, request, jsonify, render_template_string
+import sqlite3
+from pathlib import Path
+
+app = Flask(__name__)
+DB = Path(__file__).with_name("makkah_smart_city.db")
+
+PAGE = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Makkah Smart City Command Center</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:18px;background:#0b1220;color:#f8fafc;font-family:Arial,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+h1{margin:0;color:#38bdf8;font-size:26px}header p{color:#94a3b8;margin:7px 0 0}
+.status{background:#14532d;color:#86efac;padding:12px 16px;border-radius:30px}
+.layout{display:flex;gap:18px;align-items:flex-start}
+nav{width:205px;flex-shrink:0;background:#172338;padding:16px;border-radius:18px;position:sticky;top:12px}
+nav h2{font-size:20px;margin:6px 8px 15px}
+nav button{display:block;width:100%;text-align:left;background:transparent;color:#7dd3fc;border:0;border-radius:10px;padding:13px 10px;margin:4px 0;font-size:15px}
+nav button.active,nav button:hover{background:#29415e;color:white}
+main{flex:1;min-width:0}.page{display:none}.page.active{display:block}
+h2{margin:5px 0 20px;font-size:24px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.card,.panel,.item{background:#192d46;border-radius:16px;padding:20px;margin-bottom:16px}
+.card{border-left:5px solid #38bdf8}.green{border-color:#22c55e}.purple{border-color:#a855f7}.gold{border-color:#eab308}
+.muted{color:#94a3b8;font-size:14px}.big{font-size:29px;font-weight:bold;margin-top:12px}
+.panel h3{margin:0 0 18px}.chartbox{height:260px;position:relative}
+.row{display:flex;justify-content:space-between;gap:12px;margin:14px 0}
+.bar{height:11px;background:#334155;border-radius:20px;overflow:hidden;margin:8px 0 17px}
+.fill{height:100%;background:#38bdf8;border-radius:20px}
+input,select{background:#0f1b2d;color:white;border:1px solid #52647b;border-radius:9px;padding:11px;width:100%;margin:6px 0 12px}
+.action{background:#0284c7;color:white;border:0;border-radius:9px;padding:11px 14px;margin:4px 5px 4px 0}
+.delete{background:#991b1b}.tag{display:inline-block;padding:6px 10px;background:#14532d;color:#86efac;border-radius:9px;margin:8px 0}
+.item h3{margin:0 0 10px}.forms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+small{color:#94a3b8}footer{text-align:center;color:#64748b;padding:24px 5px}
+@media(max-width:700px){body{padding:12px}.layout{flex-direction:column}nav{width:100%;position:static}nav h2{margin-bottom:8px}nav button{display:inline-block;width:auto;padding:10px 11px}.grid{grid-template-columns:1fr}.forms{grid-template-columns:1fr}.chartbox{height:230px}}
+</style>
+</head>
+<body>
+<header>
+ <div><h1>MAKKAH SMART CITY</h1><p>COMMAND CENTER v5.0 · DATABASE EDITION</p></div>
+ <div class="status">● SYSTEM ONLINE</div>
+</header>
+<div class="layout">
+<nav>
+ <h2>MENU</h2>
+ <button class="active" onclick="showPage('dashboard',this)">▣ Dashboard</button>
+ <button onclick="showPage('districts',this)">▦ Districts</button>
+ <button onclick="showPage('budget',this)">◇ Budget</button>
+ <button onclick="showPage('projects',this)">⚒ Projects</button>
+ <button onclick="showPage('reports',this)">▤ Reports</button>
+</nav>
+<main>
+<section id="dashboard" class="page active">
+ <h2>CITY OVERVIEW</h2>
+ <div class="grid">
+  <div class="card"><div class="muted">TOTAL DISTRICTS</div><div class="big" id="kDistricts">—</div></div>
+  <div class="card green"><div class="muted">TOTAL BUDGET</div><div class="big" id="kBudget">—</div></div>
+  <div class="card purple"><div class="muted">AVERAGE DEVELOPMENT</div><div class="big" id="kDevelopment">—</div></div>
+  <div class="card gold"><div class="muted">TOTAL PROJECTS</div><div class="big" id="kProjects">—</div></div>
+ </div>
+ <div class="panel"><h3>📊 District Development</h3><div class="chartbox"><canvas id="developmentChart"></canvas></div></div>
+ <div class="panel"><h3>💰 Budget Distribution</h3><div class="chartbox"><canvas id="budgetChart"></canvas></div></div>
+ <div class="panel"><h3>🏗 Project Progress</h3><div class="chartbox"><canvas id="projectChart"></canvas></div></div>
+</section>
+
+<section id="districts" class="page">
+ <h2>DISTRICT MANAGEMENT</h2>
+ <input id="districtSearch" placeholder="Search district..." oninput="renderDistricts()">
+ <div class="panel">
+  <h3>Add District</h3>
+  <div class="forms">
+   <div><input id="dName" placeholder="District name"></div>
+   <div><input id="dPopulation" type="number" min="0" placeholder="Population"></div>
+   <div><select id="dInfra"><option>Good</option><option>Moderate</option><option>Needs Attention</option></select></div>
+   <div><input id="dDevelopment" type="number" min="0" max="100" placeholder="Development %"></div>
+  </div>
+  <button class="action" onclick="addDistrict()">Add District</button>
+ </div>
+ <div id="districtList"></div>
+</section>
+
+<section id="budget" class="page">
+ <h2>BUDGET MANAGEMENT</h2>
+ <div class="grid">
+  <div class="card green"><div class="muted">TOTAL ALLOCATED</div><div class="big" id="bTotal">—</div></div>
+  <div class="card"><div class="muted">TOTAL USED</div><div class="big" id="bUsed">—</div></div>
+ </div>
+ <div class="panel"><h3>Budget by District</h3><div id="budgetRows"></div></div>
+ <div class="panel"><h3>Update District Budget</h3>
+  <select id="budgetDistrict"></select>
+  <input id="budgetAmount" type="number" min="0" placeholder="New allocated budget (SAR)">
+  <input id="budgetUsed" type="number" min="0" placeholder="Amount used (SAR)">
+  <button class="action" onclick="updateBudget()">Save Budget</button>
+ </div>
+</section>
+
+<section id="projects" class="page">
+ <h2>PROJECT MANAGEMENT</h2>
+ <div class="panel"><h3>Add Project</h3>
+  <input id="pName" placeholder="Project name">
+  <div class="forms">
+   <div><select id="pStatus"><option>Planning</option><option>Ongoing</option><option>Completed</option></select></div>
+   <div><input id="pProgress" type="number" min="0" max="100" placeholder="Progress %"></div>
+  </div>
+  <button class="action" onclick="addProject()">Add Project</button>
+ </div>
+ <div id="projectList"></div>
+</section>
+
+<section id="reports" class="page">
+ <h2>SYSTEM REPORTS</h2>
+ <div class="panel" id="reportSummary">Loading report...</div>
+ <div class="panel"><h3>Database</h3><p>Storage: Local SQLite database</p><p>Updates: Saved on this device when the Flask app is running</p><p><small>All included figures are demonstration data, not official Makkah city statistics.</small></p></div>
+ <button class="action" onclick="refreshAll()">Refresh Reports</button>
+</section>
+</main>
+</div>
+<footer>MAKKAH SMART CITY · EDUCATIONAL DEMO · v5.0</footer>
+
+<script>
+let data = {districts:[], projects:[], budget:[]};
+let charts = {};
+
+function showPage(id,btn){
+ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+ document.getElementById(id).classList.add('active');
+ document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+ btn.classList.add('active');
+}
+async function api(url,options={}){
+ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...options});
+ const result=await r.json();
+ if(!r.ok) throw new Error(result.error||'Request failed');
+ return result;
+}
+function money(n){return 'SAR '+Number(n).toLocaleString('en-US');}
+function drawChart(id,type,labels,values,label){
+ if(charts[id]) charts[id].destroy();
+ const ctx=document.getElementById(id);
+ charts[id]=new Chart(ctx,{type,data:{labels,datasets:[{label,data:values,borderWidth:2,
+ backgroundColor:['#38bdf8','#22c55e','#a855f7','#eab308','#f97316','#14b8a6'],
+ borderColor:'#38bdf8',tension:.3}]},
+ options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#e2e8f0'}}},
+ scales:type==='doughnut'?{}:{x:{ticks:{color:'#cbd5e1'},grid:{color:'#26364b'}},y:{beginAtZero:true,ticks:{color:'#cbd5e1'},grid:{color:'#26364b'}}}}});
+}
+async function refreshAll(){
+ try{
+  data=await api('/api/data');
+  const total=data.budget.reduce((s,x)=>s+x.allocated,0);
+  const used=data.budget.reduce((s,x)=>s+x.used,0);
+  const avg=data.districts.length?data.districts.reduce((s,x)=>s+x.development,0)/data.districts.length:0;
+  document.getElementById('kDistricts').textContent=data.districts.length;
+  document.getElementById('kBudget').textContent=money(total);
+  document.getElementById('kDevelopment').textContent=avg.toFixed(1)+'%';
+  document.getElementById('kProjects').textContent=data.projects.length;
+  document.getElementById('bTotal').textContent=money(total);
+  document.getElementById('bUsed').textContent=money(used);
+  drawChart('developmentChart','bar',data.districts.map(x=>x.name),data.districts.map(x=>x.development),'Development %');
+  drawChart('budgetChart','doughnut',data.budget.map(x=>x.name),data.budget.map(x=>x.allocated),'Allocated SAR');
+  drawChart('projectChart','line',data.projects.map(x=>x.name),data.projects.map(x=>x.progress),'Progress %');
+  renderDistricts();renderBudget();renderProjects();renderReports();
+ }catch(e){alert('Could not load data: '+e.message);}
+}
+function renderDistricts(){
+ const q=(document.getElementById('districtSearch')?.value||'').toLowerCase();
+ document.getElementById('districtList').innerHTML=data.districts.filter(d=>d.name.toLowerCase().includes(q)).map(d=>
+ `<div class="item"><h3>${esc(d.name)}</h3><p>Population: ${Number(d.population).toLocaleString()}</p><p>Infrastructure: ${esc(d.infrastructure)}</p><p>Development: ${d.development}%</p><div class="bar"><div class="fill" style="width:${d.development}%"></div></div></div>`).join('');
+ document.getElementById('budgetDistrict').innerHTML=data.budget.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+}
+function renderBudget(){
+ document.getElementById('budgetRows').innerHTML=data.budget.map(b=>`<div class="row"><span>${esc(b.name)}</span><b>${money(b.allocated)}</b></div><div class="bar"><div class="fill" style="width:${Math.min(100,b.allocated/Math.max(1,...data.budget.map(x=>x.allocated))*100)}%"></div></div><small>Used: ${money(b.used)}</small>`).join('');
+}
+function renderProjects(){
+ document.getElementById('projectList').innerHTML=data.projects.map(p=>`<div class="item"><h3>${esc(p.name)}</h3><span class="tag">${esc(p.status)}</span><p>Progress: ${p.progress}%</p><div class="bar"><div class="fill" style="width:${p.progress}%;${p.status==='Completed'?'background:#22c55e':''}"></div></div><button class="action" onclick="changeProject(${p.id})">Update</button><button class="action delete" onclick="deleteProject(${p.id})">Delete</button></div>`).join('');
+}
+function renderReports(){
+ const used=data.budget.reduce((s,x)=>s+x.used,0),total=data.budget.reduce((s,x)=>s+x.allocated,0);
+ document.getElementById('reportSummary').innerHTML=`<h3>City Summary</h3><div class="row"><span>Districts</span><b>${data.districts.length}</b></div><div class="row"><span>Projects</span><b>${data.projects.length}</b></div><div class="row"><span>Allocated budget</span><b>${money(total)}</b></div><div class="row"><span>Budget used</span><b>${money(used)}</b></div><div class="row"><span>Remaining budget</span><b>${money(total-used)}</b></div>`;
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function addDistrict(){
+ const body={name:dName.value.trim(),population:Number(dPopulation.value),infrastructure:dInfra.value,development:Number(dDevelopment.value)};
+ if(!body.name||!Number.isFinite(body.population)||body.population<0||!Number.isFinite(body.development)||body.development<0||body.development>100)return alert('Enter valid district details.');
+ try{await api('/api/districts',{method:'POST',body:JSON.stringify(body)});dName.value='';dPopulation.value='';dDevelopment.value='';await refreshAll();}catch(e){alert(e.message);}
+}
+async function updateBudget(){
+ const id=Number(budgetDistrict.value),allocated=Number(budgetAmount.value),used=Number(budgetUsed.value);
+ if(!id||allocated<0||used<0||used>allocated)return alert('Enter valid budget values. Used amount cannot exceed allocation.');
+ try{await api('/api/budget/'+id,{method:'PUT',body:JSON.stringify({allocated,used})});budgetAmount.value='';budgetUsed.value='';await refreshAll();}catch(e){alert(e.message);}
+}
+async function addProject(){
+ const body={name:pName.value.trim(),status:pStatus.value,progress:Number(pProgress.value)};
+ if(!body.name||!Number.isFinite(body.progress)||body.progress<0||body.progress>100)return alert('Enter a project name and progress from 0 to 100.');
+ try{await api('/api/projects',{method:'POST',body:JSON.stringify(body)});pName.value='';pProgress.value='';await refreshAll();}catch(e){alert(e.message);}
+}
+async function changeProject(id){
+ const p=data.projects.find(x=>x.id===id);if(!p)return;
+ const progress=prompt('New progress (0-100):',p.progress);if(progress===null)return;
+ const n=Number(progress);if(!Number.isInteger(n)||n<0||n>100)return alert('Progress must be 0 to 100.');
+ const status=n===100?'Completed':(p.status==='Planning'?'Ongoing':p.status);
+ try{await api('/api/projects/'+id,{method:'PUT',body:JSON.stringify({progress:n,status})});await refreshAll();}catch(e){alert(e.message);}
+}
+async function deleteProject(id){
+ if(!confirm('Delete this project?'))return;
+ try{await api('/api/projects/'+id,{method:'DELETE'});await refreshAll();}catch(e){alert(e.message);}
+}
+refreshAll();
+setInterval(refreshAll,30000);
+</script>
+</body>
+</html>
+"""
+
+def connect():
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
+    return con
+
+def init_db():
+    with connect() as con:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS districts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            population INTEGER NOT NULL,
+            infrastructure TEXT NOT NULL,
+            development REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS budgets(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            district_id INTEGER NOT NULL UNIQUE,
+            allocated INTEGER NOT NULL,
+            used INTEGER NOT NULL,
+            FOREIGN KEY(district_id) REFERENCES districts(id)
+        );
+        CREATE TABLE IF NOT EXISTS projects(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            progress INTEGER NOT NULL
+        );
+        """)
+        if con.execute("SELECT COUNT(*) FROM districts").fetchone()[0] == 0:
+            districts = [
+                ("Central Makkah",15000,"Good",75,150000000,90000000),
+                ("Northern Makkah",12000,"Moderate",60,120000000,75000000),
+                ("Southern Makkah",12000,"Moderate",80,110000000,60000000),
+                ("Western Makkah",10000,"Good",70,120000000,80000000)
+            ]
+            for name,pop,infra,dev,alloc,used in districts:
+                cur=con.execute("INSERT INTO districts(name,population,infrastructure,development) VALUES(?,?,?,?)",(name,pop,infra,dev))
+                con.execute("INSERT INTO budgets(district_id,allocated,used) VALUES(?,?,?)",(cur.lastrowid,alloc,used))
+        if con.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
+            con.executemany("INSERT INTO projects(name,status,progress) VALUES(?,?,?)",[
+                ("Haram Expansion","Ongoing",75),
+                ("Road Development","Completed",100),
+                ("Water Network","Ongoing",60),
+                ("Hospital Construction","Planning",20)
+            ])
+
+@app.get("/")
+def home():
+    return render_template_string(PAGE)
+
+@app.get("/api/data")
+def get_data():
+    with connect() as con:
+        districts=[dict(r) for r in con.execute("SELECT * FROM districts ORDER BY id")]
+        projects=[dict(r) for r in con.execute("SELECT * FROM projects ORDER BY id")]
+        budget=[dict(r) for r in con.execute("""
+            SELECT budgets.id, districts.id AS district_id, districts.name,
+                   budgets.allocated, budgets.used
+            FROM budgets JOIN districts ON districts.id=budgets.district_id
+            ORDER BY districts.id
+        """)]
+    return jsonify(districts=districts,projects=projects,budget=budget)
+
+@app.post("/api/districts")
+def add_district():
+    d=request.get_json(force=True)
+    name=str(d.get("name","")).strip()
+    try:
+        pop=int(d.get("population",-1)); dev=float(d.get("development",-1))
+    except (TypeError,ValueError):
+        return jsonify(error="Population and development must be numbers."),400
+    infra=str(d.get("infrastructure","Good"))
+    if not name or pop<0 or not 0<=dev<=100 or infra not in ("Good","Moderate","Needs Attention"):
+        return jsonify(error="Invalid district details."),400
+    try:
+        with connect() as con:
+            cur=con.execute("INSERT INTO districts(name,population,infrastructure,development) VALUES(?,?,?,?)",(name,pop,infra,dev))
+            con.execute("INSERT INTO budgets(district_id,allocated,used) VALUES(?,0,0)",(cur.lastrowid,))
+    except sqlite3.IntegrityError:
+        return jsonify(error="That district already exists."),400
+    return jsonify(ok=True)
+
+@app.put("/api/budget/<int:district_id>")
+def update_budget(district_id):
+    d=request.get_json(force=True)
+    try: allocated=int(d.get("allocated",-1)); used=int(d.get("used",-1))
+    except (TypeError,ValueError): return jsonify(error="Budget values must be whole numbers."),400
+    if allocated<0 or used<0 or used>allocated: return jsonify(error="Invalid budget values."),400
+    with connect() as con:
+        cur=con.execute("UPDATE budgets SET allocated=?,used=? WHERE district_id=?",(allocated,used,district_id))
+        if cur.rowcount==0:return jsonify(error="District budget not found."),404
+    return jsonify(ok=True)
+
+@app.post("/api/projects")
+def add_project():
+    d=request.get_json(force=True)
+    name=str(d.get("name","")).strip(); status=str(d.get("status","Planning"))
+    try: progress=int(d.get("progress",-1))
+    except (TypeError,ValueError): return jsonify(error="Progress must be a whole number."),400
+    if not name or status not in ("Planning","Ongoing","Completed") or not 0<=progress<=100:
+        return jsonify(error="Invalid project details."),400
+    if progress==100: status="Completed"
+    with connect() as con:
+        con.execute("INSERT INTO projects(name,status,progress) VALUES(?,?,?)",(name,status,progress))
+    return jsonify(ok=True)
+
+@app.put("/api/projects/<int:project_id>")
+def update_project(project_id):
+    d=request.get_json(force=True)
+    try: progress=int(d.get("progress",-1))
+    except (TypeError,ValueError): return jsonify(error="Progress must be a whole number."),400
+    status=str(d.get("status","Ongoing"))
+    if not 0<=progress<=100 or status not in ("Planning","Ongoing","Completed"):
+        return jsonify(error="Invalid project update."),400
+    if progress==100:status="Completed"
+    with connect() as con:
+        cur=con.execute("UPDATE projects SET progress=?,status=? WHERE id=?",(progress,status,project_id))
+        if cur.rowcount==0:return jsonify(error="Project not found."),404
+    return jsonify(ok=True)
+
+@app.delete("/api/projects/<int:project_id>")
+def delete_project(project_id):
+    with connect() as con:
+        cur=con.execute("DELETE FROM projects WHERE id=?",(project_id,))
+        if cur.rowcount==0:return jsonify(error="Project not found."),404
+    return jsonify(ok=True)
+
+if __name__ == "__main__":
+    init_db()
+    print("Makkah Smart City is running at http://127.0.0.1:5000")
+    app.run(host="127.0.0.1",port=5000,debug=False)
